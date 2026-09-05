@@ -1,0 +1,303 @@
+'use client'
+
+import { useMemo, useState } from 'react'
+import {
+  BASE_ASSUMPTIONS,
+  Assumptions,
+  calculate,
+  breakEvenRevenue
+} from '../lib/finance'
+
+const money = (n: number) => `£${n.toFixed(2)}m`
+const pct = (n: number) => `${n.toFixed(1)}%`
+
+export default function Home() {
+  const [a, setA] = useState<Assumptions>({ ...BASE_ASSUMPTIONS })
+  const [scenarioText, setScenarioText] = useState('')
+  const [status, setStatus] = useState('')
+  const [sensDetail, setSensDetail] = useState('')
+
+  const base = useMemo(() => calculate(BASE_ASSUMPTIONS), [])
+  const current = useMemo(() => calculate(a), [a])
+
+  function update<K extends keyof Assumptions>(key: K, value: number) {
+    setA(prev => ({ ...prev, [key]: value }))
+  }
+
+  async function runScenario() {
+    setStatus('Parsing scenario...')
+    const res = await fetch('/api/scenario', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: scenarioText })
+    })
+    const data = await res.json()
+    const p = data.parsed || {}
+
+    setA(prev => ({
+      ...prev,
+      growth: typeof p.growth === 'number' ? p.growth : prev.growth,
+      grossMargin: typeof p.grossMargin === 'number' ? p.grossMargin : prev.grossMargin,
+      payroll: typeof p.payrollChangePct === 'number'
+        ? BASE_ASSUMPTIONS.payroll * (1 + p.payrollChangePct / 100)
+        : prev.payroll,
+      opex: typeof p.opexChangePct === 'number'
+        ? BASE_ASSUMPTIONS.opex * (1 + p.opexChangePct / 100)
+        : prev.opex
+    }))
+
+    setStatus(
+      Object.keys(p).length
+        ? 'Scenario applied.'
+        : 'Could not confidently parse that sentence.'
+    )
+  }
+
+  const rows = [
+    ['Revenue', base.revenue, current.revenue],
+    ['COGS', base.cogs, current.cogs],
+    ['Gross profit', base.grossProfit, current.grossProfit],
+    ['Payroll', base.payroll, current.payroll],
+    ['Other Opex', base.opex, current.opex],
+    ['EBITDA', base.ebitda, current.ebitda],
+    ['Capex', base.capex, current.capex],
+    ['Cash proxy', base.cashProxy, current.cashProxy]
+  ] as const
+
+  const drivers = [
+    ['Revenue / growth', (current.revenue - base.revenue) * (BASE_ASSUMPTIONS.grossMargin / 100)],
+    ['Gross margin', current.revenue * ((a.grossMargin - BASE_ASSUMPTIONS.grossMargin) / 100)],
+    ['Payroll', -(a.payroll - BASE_ASSUMPTIONS.payroll)],
+    ['Other Opex', -(a.opex - BASE_ASSUMPTIONS.opex)]
+  ].sort((x, y) => Math.abs(Number(y[1])) - Math.abs(Number(x[1])))
+
+  const breakEven = breakEvenRevenue(a, 0)
+  const revenueFor2m = breakEvenRevenue(a, 2)
+  const revenueFor20Pct = a.grossMargin > 20
+    ? (a.payroll + a.opex) / ((a.grossMargin / 100) - 0.20)
+    : null
+
+  const revenueMoves = [-20, -10, 0, 10, 20]
+  const marginMoves = [-5, -2.5, 0, 2.5, 5]
+
+  return (
+    <main className="page">
+      <div className="shell">
+        <header className="hero">
+          <h1>FP&A Copilot</h1>
+          <p>Financial planning, scenario analysis, break-even testing, and AI-ready what-if workflows.</p>
+        </header>
+
+        <div className="grid">
+          <section className="card">
+            <h2>Plan assumptions</h2>
+            <p className="muted">Edit the scenario or describe a what-if in natural language.</p>
+
+            <div className="inputs">
+              <label>
+                <span>Base revenue £m</span>
+                <input type="number" step="0.1" value={a.baseRevenue}
+                  onChange={e => update('baseRevenue', Number(e.target.value))} />
+              </label>
+
+              <label>
+                <span>Growth %</span>
+                <input type="number" step="0.5" value={a.growth}
+                  onChange={e => update('growth', Number(e.target.value))} />
+              </label>
+
+              <label>
+                <span>Gross margin %</span>
+                <input type="number" step="0.5" value={a.grossMargin}
+                  onChange={e => update('grossMargin', Number(e.target.value))} />
+              </label>
+
+              <label>
+                <span>Payroll £m</span>
+                <input type="number" step="0.1" value={a.payroll}
+                  onChange={e => update('payroll', Number(e.target.value))} />
+              </label>
+
+              <label>
+                <span>Other Opex £m</span>
+                <input type="number" step="0.1" value={a.opex}
+                  onChange={e => update('opex', Number(e.target.value))} />
+              </label>
+
+              <label>
+                <span>Capex £m</span>
+                <input type="number" step="0.1" value={a.capex}
+                  onChange={e => update('capex', Number(e.target.value))} />
+              </label>
+            </div>
+
+            <hr style={{ margin: '22px 0', border: 0, borderTop: '1px solid var(--border)' }} />
+
+            <h3>Ask a what-if</h3>
+            <p className="muted">Example: Revenue falls 12%, margin drops to 39%, payroll rises 6%.</p>
+
+            <textarea
+              value={scenarioText}
+              onChange={e => setScenarioText(e.target.value)}
+              placeholder="Describe your scenario..."
+            />
+
+            <div className="actions">
+              <button className="primary" onClick={runScenario}>Run scenario</button>
+
+              <button className="secondary" onClick={() => setA({
+                ...BASE_ASSUMPTIONS,
+                growth: 18,
+                grossMargin: 48,
+                payroll: 2.6,
+                opex: 1.75
+              })}>Upside</button>
+
+              <button className="secondary" onClick={() => setA({
+                ...BASE_ASSUMPTIONS,
+                growth: -12,
+                grossMargin: 38,
+                payroll: 2.75,
+                opex: 2.0
+              })}>Downside</button>
+
+              <button className="secondary" onClick={() => {
+                setA({ ...BASE_ASSUMPTIONS })
+                setScenarioText('')
+                setStatus('')
+                setSensDetail('')
+              }}>Reset</button>
+            </div>
+
+            <div className="status">{status}</div>
+          </section>
+
+          <section>
+            <div className="kpis">
+              <Kpi label="Revenue" value={money(current.revenue)} delta={current.revenue - base.revenue} />
+              <Kpi label="EBITDA" value={money(current.ebitda)} delta={current.ebitda - base.ebitda} />
+              <Kpi label="EBITDA margin" value={pct(current.ebitdaMargin)} delta={current.ebitdaMargin - base.ebitdaMargin} isPct />
+              <Kpi label="Cash proxy" value={money(current.cashProxy)} delta={current.cashProxy - base.cashProxy} />
+            </div>
+
+            <div className="card" style={{ marginTop: 16 }}>
+              <h2>Scenario comparison</h2>
+              <div className="tableWrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Metric</th>
+                      <th>Base</th>
+                      <th>Scenario</th>
+                      <th>Variance</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map(([label, b, c]) => (
+                      <tr key={label}>
+                        <td>{label}</td>
+                        <td>{money(b)}</td>
+                        <td>{money(c)}</td>
+                        <td>{c - b >= 0 ? '+' : '-'}£{Math.abs(c - b).toFixed(2)}m</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="split" style={{ marginTop: 16 }}>
+              <div className="card">
+                <h3>Management insights</h3>
+                <p>
+                  {current.ebitda < 0
+                    ? 'The scenario produces negative EBITDA and needs immediate mitigation.'
+                    : current.ebitdaMargin < base.ebitdaMargin
+                    ? 'The company remains profitable, but operating leverage weakens versus plan.'
+                    : 'The current scenario improves profitability versus the base plan.'}
+                </p>
+                <p>
+                  <strong>Top drivers:</strong>{' '}
+                  {drivers.slice(0, 3).map(([name, v]) =>
+                    `${name} (${Number(v) >= 0 ? '+' : '-'}£${Math.abs(Number(v)).toFixed(2)}m)`
+                  ).join(', ')}.
+                </p>
+              </div>
+
+              <div className="card">
+                <h3>Break-even analysis</h3>
+                <p><strong>EBITDA break-even revenue:</strong> {breakEven === null ? 'N/A' : money(breakEven)}</p>
+                <p><strong>Revenue for £2m EBITDA:</strong> {revenueFor2m === null ? 'N/A' : money(revenueFor2m)}</p>
+                <p><strong>Revenue for 20% EBITDA margin:</strong> {revenueFor20Pct === null ? 'Not achievable at current gross margin' : money(revenueFor20Pct)}</p>
+              </div>
+            </div>
+
+            <div className="card sensitivity" style={{ marginTop: 16 }}>
+              <h2>EBITDA sensitivity</h2>
+              <p className="muted">Revenue movement versus gross-margin movement.</p>
+
+              <div className="tableWrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Revenue</th>
+                      {marginMoves.map(m => <th key={m}>GM {m >= 0 ? '+' : ''}{m}pp</th>)}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {revenueMoves.map(r => (
+                      <tr key={r}>
+                        <td>{r >= 0 ? '+' : ''}{r}%</td>
+                        {marginMoves.map(m => {
+                          const test = calculate({
+                            ...a,
+                            baseRevenue: a.baseRevenue * (1 + r / 100),
+                            grossMargin: Math.min(100, Math.max(0, a.grossMargin + m))
+                          })
+                          return (
+                            <td key={m}>
+                              <button onClick={() => setSensDetail(
+                                `Revenue ${r >= 0 ? '+' : ''}${r}% and gross margin ${m >= 0 ? '+' : ''}${m}pp gives EBITDA ${money(test.ebitda)} and EBITDA margin ${pct(test.ebitdaMargin)}.`
+                              )}>
+                                {money(test.ebitda)}
+                              </button>
+                            </td>
+                          )
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="status">{sensDetail}</div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </main>
+  )
+}
+
+function Kpi({
+  label,
+  value,
+  delta,
+  isPct = false
+}: {
+  label: string
+  value: string
+  delta: number
+  isPct?: boolean
+}) {
+  return (
+    <div className="kpi">
+      <div className="label">{label}</div>
+      <div className="value">{value}</div>
+      <div className="delta">
+        {delta >= 0 ? '+' : '-'}
+        {isPct ? `${Math.abs(delta).toFixed(1)}pp` : `£${Math.abs(delta).toFixed(2)}m`} vs base
+      </div>
+    </div>
+  )
+}
